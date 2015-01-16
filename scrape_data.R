@@ -1,0 +1,223 @@
+Bla bla bla
+
+```{r}
+## Libraries ----
+library("dplyr")
+library("stringr")
+library("rvest")
+
+## Run vars ----
+tmp_folder <- "./unzipped/"
+unzipopts <- "-o"
+```
+
+```{r}
+
+
+## Extract data from doc ----
+docs <- list.files("dokument", recursive = TRUE, full.names = TRUE)
+docs <- gsub(" ", "\\ ", docs, fixed = TRUE)
+
+scraped_data <- list()
+
+for (i in 1:length(docs)) {
+  doc <- docs[i]
+  
+  # unzip DOC file
+  system2("unzip", paste(unzipopts, doc, "-d", paste0(tmp_folder, i, "/")))
+  
+  # Read data from file
+  path <- paste0("unzipped/", i, "/word/document.xml")
+  xdoc <- xml(path)
+  
+  # Get relevant XML nodes ("p")
+  paragraphs <- xdoc %>%
+    xml_node("body") %>%
+    xml_node("body") %>%
+    xml_nodes("p")
+  
+  # Which nodes are headers? ("ppr")
+  is_header <- paragraphs %>% sapply(function(node) {
+    headernodes <- node %>% xml_nodes("ppr")
+    length(headernodes)
+  })
+  
+  dataRows <- list()
+  
+  for (j in 1:length(is_header)) {
+    # Extract text from header nodes
+    if (is_header[j] == 1) {
+      # Clear data list
+      data <- list()
+      
+      header_name <- paragraphs[j] %>%
+        xml_text()
+      
+      # Fix encoding due to random encoding handling in Windows
+      Encoding(header_name) <- "UTF-8"
+      
+      cat("Header name: ", header_name, "\n")
+      
+    } else {
+      content <- paragraphs[j] %>%
+        xml_nodes("t") %>%
+        xml_text()
+      Encoding(content) <- "UTF-8"
+      
+      cat("Text: ", content, "\n")
+      
+      # attribs <- paragraphs[j] %>%
+      #  xml_attrs()
+      
+      data <- data %>% append(list(content))
+    }
+    
+    # Save data from last run
+    if (is.na(is_header[j+1])) {
+      dataRows <- dataRows %>% append(list(list(header = header_name, data = data)))
+    } else if (is_header[j+1] == 1) {
+      dataRows <- dataRows %>% append(list(list(header = header_name, data = data)))
+    }
+  }
+  
+  scraped_data <- scraped_data %>% append(list(dataRows))
+}
+```
+
+```{r}
+
+## Gather scraped data into table form ----
+
+# List structure:
+# [n](doc) >
+#   [n](paragraph) >
+#     header
+#     data >
+#       [n](text)
+#
+# Task: For each instance of (text), create a row with [header] and [text]
+
+docnum <- 0
+dokumentdata <- data.frame(
+  docnum = integer(),
+  header = character(),
+  text = character()
+)
+
+row <- 0
+
+for (doc in scraped_data) {
+  docnum <- docnum + 1
+  for (par in doc) {
+    header <- par$header
+    for (text in par$data) {
+      if (length(text) == 0) {
+        cat("No text; passing\n")
+        next()
+      }
+      text <- paste(text, collapse = " ")
+      datarow <- list(docnum = docnum, header = header, text = text)
+      row <- row + 1
+      cat(paste0(row, ": docnum: ", docnum, "; header: ", header, "; text: ", text), "\n")
+      dokumentdata <- bind_rows(dokumentdata, as_data_frame(datarow))
+    }
+  }
+}
+
+```
+
+```{r}
+## Create code tables ----
+personalia_raw <- dokumentdata %>%
+  filter(header == "Personalia") %>%
+  group_by(docnum)
+
+## Personuppgifter
+namn <- personalia_raw %>%
+  filter(str_detect(text, "namn" %>% ignore.case())) %>%
+  mutate(
+    namn = str_extract_all(text, "(?<=namn:).*" %>% perl() %>% ignore.case())[[1]] %>%
+      str_trim()
+  ) %>%
+  select(docnum, namn)
+
+personnr <- personalia_raw %>%
+  filter(str_detect(text, "\\d{6}-\\d{4}" %>% perl())) %>%
+  mutate(personnr = str_extract_all(text, "\\d{6}-\\d{4}" %>% perl())[[1]]) %>%
+  select(docnum, personnr)
+
+
+## Ekonomi
+ekonomi_raw <- dokumentdata %>%
+  filter(header == "Ekonomi" | header == "Årsinkomster") %>%
+  group_by(docnum)
+
+inkomster <- ekonomi_raw %>%
+  filter(str_detect(text, "\\d{2,3}(\\s)?\\d{3}" %>% perl())) %>%
+  mutate(
+    ar = str_extract(text, "20\\d{2}" %>% perl()),
+    inkomst = str_extract(text, "\\d{2,3}(\\s)?\\d{3}" %>% perl())
+  )
+
+# Dokument 5 har flera år på samma rad. Det kan vi fixa.
+ink5 <- ekonomi_raw$text[ekonomi_raw$docnum == 5][[1]]
+yrs <- str_extract_all(ink5, "(?<=\\()\\d{4}(?=\\))" %>% perl())[[1]]
+ink <- str_extract_all(ink5, "\\d{2,3}(\\s)?\\d{3}" %>% perl())[[1]]
+inkomster_5 <- data_frame(
+  docnum = 5,
+  ar = yrs,
+  inkomst = ink
+)
+
+# Lägg på inkomsterna för person 5
+inkomster <- inkomster %>%
+  filter(!is.na(ar), docnum != 5) %>%
+  bind_rows(inkomster_5)
+
+## Brottmål
+brottmal_raw <- dokumentdata %>%
+  filter(header == "Brottmål") %>%
+  group_by(docnum)
+
+brottmal <- brottmal_raw %>%
+  filter(str_detect(text, "\\d{3}-\\d{2,3}")) %>%
+  mutate(inblandad_i_mal = str_extract(text, "\\d{3}-\\d{2,3}")) %>%
+  select(docnum, inblandad_i_mal)
+
+## Övriga upplysningar
+ovrigt <- dokumentdata %>%
+  filter(header == "Övrigt") %>%
+  select(docnum, kommentar = text)
+
+## Sätt ihop all data till en mer intressant databas
+persondatabas <- namn %>%
+  left_join(personnr, by = "docnum") %>%
+  left_join(ovrigt, by = "docnum")
+
+# Om vi vill kan vi också lägga till t.ex. inkomster och brottmål som
+# kolumner i databasen (detta kommer att skapa viss redundans)
+persondatabas_stor <- persondatabas %>%
+  left_join(inkomster, by = "docnum") %>%
+  left_join(brottmal, by = "docnum")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
