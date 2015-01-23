@@ -1,6 +1,3 @@
-Bla bla bla
-
-```{r}
 ## Libraries ----
 library("dplyr")
 library("stringr")
@@ -9,10 +6,6 @@ library("rvest")
 ## Run vars ----
 tmp_folder <- "./unzipped/"
 unzipopts <- "-o"
-```
-
-```{r}
-
 
 ## Extract data from doc ----
 docs <- list.files("dokument", recursive = TRUE, full.names = TRUE)
@@ -22,56 +15,56 @@ scraped_data <- list()
 
 for (i in 1:length(docs)) {
   doc <- docs[i]
-  
+
   # unzip DOC file
   system2("unzip", paste(unzipopts, doc, "-d", paste0(tmp_folder, i, "/")))
-  
+
   # Read data from file
   path <- paste0("unzipped/", i, "/word/document.xml")
   xdoc <- xml(path)
-  
+
   # Get relevant XML nodes ("p")
   paragraphs <- xdoc %>%
     xml_node("body") %>%
     xml_node("body") %>%
     xml_nodes("p")
-  
+
   # Which nodes are headers? ("ppr")
   is_header <- paragraphs %>% sapply(function(node) {
     headernodes <- node %>% xml_nodes("ppr")
     length(headernodes)
   })
-  
+
   dataRows <- list()
-  
+
   for (j in 1:length(is_header)) {
     # Extract text from header nodes
     if (is_header[j] == 1) {
       # Clear data list
       data <- list()
-      
+
       header_name <- paragraphs[j] %>%
         xml_text()
-      
+
       # Fix encoding due to random encoding handling in Windows
       Encoding(header_name) <- "UTF-8"
-      
+
       cat("Header name: ", header_name, "\n")
-      
+
     } else {
       content <- paragraphs[j] %>%
         xml_nodes("t") %>%
         xml_text()
       Encoding(content) <- "UTF-8"
-      
+
       cat("Text: ", content, "\n")
-      
+
       # attribs <- paragraphs[j] %>%
       #  xml_attrs()
-      
+
       data <- data %>% append(list(content))
     }
-    
+
     # Save data from last run
     if (is.na(is_header[j+1])) {
       dataRows <- dataRows %>% append(list(list(header = header_name, data = data)))
@@ -79,12 +72,10 @@ for (i in 1:length(docs)) {
       dataRows <- dataRows %>% append(list(list(header = header_name, data = data)))
     }
   }
-  
+
   scraped_data <- scraped_data %>% append(list(dataRows))
 }
-```
 
-```{r}
 
 ## Gather scraped data into table form ----
 
@@ -124,9 +115,7 @@ for (doc in scraped_data) {
   }
 }
 
-```
 
-```{r}
 ## Create code tables ----
 personalia_raw <- dokumentdata %>%
   filter(header == "Personalia") %>%
@@ -199,19 +188,6 @@ persondatabas <- namn %>%
 persondatabas_stor <- persondatabas %>%
   left_join(inkomster, by = "docnum") %>%
   left_join(brottmal, by = "docnum")
-
-```
-
-
-
-
-
-
-
-
-
-
-
 
 
 
